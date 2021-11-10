@@ -97,6 +97,9 @@
 #define IPV4LL_HOSTMASK 0x0000FFFFL
 #define IPV4LL_BROADCAST 0xA9FEFFFFL
 
+static uint32_t avahi_network = IPV4LL_NETWORK;
+static uint32_t avahi_broadcast = IPV4LL_BROADCAST;
+
 #define ETHER_ADDRLEN 6
 #define ETHER_HDR_SIZE (2+2*ETHER_ADDRLEN)
 #define ARP_PACKET_SIZE (8+4+4+2*ETHER_ADDRLEN)
@@ -206,7 +209,7 @@ static uint32_t pick_addr(uint32_t old_addr) {
         while (r > 0xFFFF)
             r = (r >> 16) ^ (r & 0xFFFF);
 
-        addr = htonl(IPV4LL_NETWORK | (uint32_t) r);
+        addr = htonl(avahi_network | (uint32_t) r);
 
     } while (addr == old_addr || !is_ll_address(addr));
 
@@ -777,7 +780,7 @@ static int recv_packet(int fd AVAHI_GCC_UNUSED, ArpPacket **packet, size_t *pack
 
 int is_ll_address(uint32_t addr) {
     return
-        ((ntohl(addr) & IPV4LL_NETMASK) == IPV4LL_NETWORK) &&
+        ((ntohl(addr) & IPV4LL_NETMASK) == avahi_network) &&
         ((ntohl(addr) & 0x0000FF00) != 0x0000) &&
         ((ntohl(addr) & 0x0000FF00) != 0xFF00);
 }
@@ -1119,7 +1122,7 @@ static int loop(int iface, uint32_t addr) {
 
         a = (a % 0xFE00) + 0x0100;
 
-        addr = htonl(IPV4LL_NETWORK | (uint32_t) a);
+        addr = htonl(avahi_network | (uint32_t) a);
     }
 
     assert(is_ll_address(addr));
@@ -1441,6 +1444,7 @@ static void help(FILE *f, const char *a0) {
             "    -V --version        Show version\n"
             "    -S --start=ADDRESS  Start with this address from the IPv4LL range\n"
             "                        169.254.0.0/16\n"
+            "    -n --network=NET    Different Network than 169.254.0.0/16\n"
             "    -t --script=script  Action script to run (defaults to\n"
             "                        "AVAHI_IPCONF_SCRIPT")\n"
             "    -w --wait           Wait until an address has been acquired before\n"
@@ -1480,6 +1484,7 @@ static int parse_command_line(int argc, char *argv[]) {
         { "start",         required_argument, NULL, 'S' },
         { "script",        required_argument, NULL, 't' },
         { "wait",          no_argument,       NULL, 'w' },
+        { "network",       required_argument, NULL, 'n' },
         { "force-bind",    no_argument,       NULL, OPTION_FORCE_BIND },
         { "no-drop-root",  no_argument,       NULL, OPTION_NO_DROP_ROOT },
 #ifdef HAVE_CHROOT
@@ -1490,7 +1495,7 @@ static int parse_command_line(int argc, char *argv[]) {
         { NULL, 0, NULL, 0 }
     };
 
-    while ((c = getopt_long(argc, argv, "hDskrcVS:t:w", long_options, NULL)) >= 0) {
+    while ((c = getopt_long(argc, argv, "hDskrcVS:t:wn:", long_options, NULL)) >= 0) {
 
         switch(c) {
             case 's':
@@ -1517,7 +1522,7 @@ static int parse_command_line(int argc, char *argv[]) {
             case 'S':
 
                 if ((start_address = inet_addr(optarg)) == (uint32_t) -1) {
-                    fprintf(stderr, "Failed to parse IP address '%s'.", optarg);
+                    fprintf(stderr, "Failed to parse IP address '%s'.\n", optarg);
                     return -1;
                 }
                 break;
@@ -1527,6 +1532,19 @@ static int parse_command_line(int argc, char *argv[]) {
                 break;
             case 'w':
                 wait_for_address = 1;
+                break;
+            case 'n':
+            /* Algorithm is simple - expect an IP address with x.y.0.0 - and reject if not */
+                if ((avahi_network = htonl(inet_addr(optarg))) == (uint32_t) -1 ) {
+                    fprintf(stderr, "Failed to parse Network IP address '%s'\n", optarg);
+                    return -1;
+                }
+                if ((avahi_network & IPV4LL_HOSTMASK) != 0) {
+                    fprintf(stderr,"Not a Network IP address '%s'\n",optarg);
+                    return -1;
+                }
+                fprintf(stdout, "Configuring for %s/16\n",optarg);
+                avahi_broadcast = avahi_network | IPV4LL_HOSTMASK;
                 break;
 
             case OPTION_NO_PROC_TITLE:
